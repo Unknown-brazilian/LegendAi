@@ -1,6 +1,3 @@
-import 'dart:io';
-
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:share_plus/share_plus.dart';
 
@@ -11,23 +8,9 @@ class ResultScreen extends StatelessWidget {
 
   const ResultScreen({super.key, required this.results});
 
-  Future<void> _save(BuildContext context, GeneratedSubtitle sub) async {
-    final bytes = await File(sub.path).readAsBytes();
-    final saved = await FilePicker.saveFile(
-      dialogTitle: 'Salvar ${sub.fileName}',
-      fileName: sub.fileName,
-      type: FileType.any,
-      bytes: bytes,
-    );
-    if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(saved != null ? 'Salvo: ${sub.fileName}' : 'Cancelado'),
-      ),
-    );
-  }
-
-  Future<void> _share(GeneratedSubtitle sub) async {
+  /// Compartilha/salva um `.srt`. A folha de compartilhamento do Android inclui
+  /// "Salvar em Arquivos/Drive", então cobre salvar numa pasta e compartilhar.
+  Future<void> _shareOne(GeneratedSubtitle sub) async {
     await SharePlus.instance.share(
       ShareParams(
         files: [XFile(sub.path, mimeType: 'application/x-subrip')],
@@ -65,8 +48,9 @@ class ResultScreen extends StatelessWidget {
         padding: const EdgeInsets.all(16),
         children: [
           Text(
-            '${results.length} arquivo(s) .srt gerado(s). '
-            'Tudo foi processado no aparelho.',
+            '${results.length} arquivo(s) .srt gerado(s) no aparelho. '
+            'Toque em Salvar/Compartilhar e escolha "Salvar em Arquivos" para '
+            'guardar numa pasta, ou um app para compartilhar.',
             style: Theme.of(context).textTheme.bodyMedium,
           ),
           const SizedBox(height: 12),
@@ -76,20 +60,10 @@ class ResultScreen extends StatelessWidget {
                 leading: const Icon(Icons.description_outlined),
                 title: Text(r.fileName),
                 subtitle: Text('${r.langName} • ${r.segments} legendas'),
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    IconButton(
-                      tooltip: 'Salvar',
-                      icon: const Icon(Icons.save_alt),
-                      onPressed: () => _save(context, r),
-                    ),
-                    IconButton(
-                      tooltip: 'Compartilhar',
-                      icon: const Icon(Icons.share),
-                      onPressed: () => _share(r),
-                    ),
-                  ],
+                trailing: IconButton(
+                  tooltip: 'Salvar / Compartilhar',
+                  icon: const Icon(Icons.share),
+                  onPressed: () => _shareOne(r),
                 ),
               ),
             ),

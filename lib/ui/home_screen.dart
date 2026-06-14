@@ -1,6 +1,6 @@
 import 'dart:io';
 
-import 'package:file_picker/file_picker.dart';
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:whisper_ggml_plus/whisper_ggml_plus.dart';
 
@@ -46,45 +46,30 @@ class _HomeScreenState extends State<HomeScreen> {
   String _status = '';
   double? _fraction;
 
-  // Estado dos modelos baixados.
+  // Estado dos modelos. O Whisper é checado por arquivo (seguro no boot).
+  // O ML Kit NÃO é consultado no boot (evita crash em aparelhos sem/limitado
+  // Google Play Services); só após o usuário baixar.
   bool _whisperReady = false;
-  List<String> _missingLangs = [];
+  bool _langsDownloaded = false;
 
-  @override
-  void initState() {
-    super.initState();
-    _refreshModelStatus();
-  }
+  // Sem trabalho no boot: a tela só renderiza. O status do modelo é checado
+  // sob demanda (ao baixar/gerar), nunca no initState — evita qualquer chamada
+  // nativa/IO no arranque que pudesse derrubar o app.
 
   List<String> get _selectedTargets =>
       _targets.entries.where((e) => e.value).map((e) => e.key).toList();
 
-  /// Idiomas (ML Kit) necessários para a config atual.
-  List<String> get _neededLangs {
-    final s = <String>{..._selectedTargets};
-    if (_sourceLang == 'auto') {
-      s.addAll(kSupportedLanguages.keys);
-    } else {
-      s.add(_sourceLang);
-    }
-    return s.toList();
-  }
-
-  Future<void> _refreshModelStatus() async {
+  Future<void> _refreshWhisperStatus() async {
     try {
       final ready = await _service.isWhisperModelReady(_model);
-      final missing = await _service.missingTranslationModels(_neededLangs);
       if (!mounted) return;
-      setState(() {
-        _whisperReady = ready;
-        _missingLangs = missing;
-      });
+      setState(() => _whisperReady = ready);
     } catch (_) {
-      // Se o ML Kit ainda não respondeu, mantém o estado atual (sem quebrar a UI).
+      // Sem acesso ao diretório ainda: mantém o estado atual.
     }
   }
 
-  bool get _modelsReady => _whisperReady && _missingLangs.isEmpty;
+  bool get _modelsReady => _whisperReady && _langsDownloaded;
 
   void _setProgress(String msg, double? frac) {
     if (!mounted) return;
@@ -96,18 +81,15 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _pickVideo() async {
     try {
-      final r = await FilePicker.pickFiles(
-        type: FileType.video,
-        allowMultiple: false,
-        withData: false,
+      // Seletor de documentos do Android (SAF): mostra os vídeos do
+      // armazenamento LOCAL do aparelho. Nada de nuvem/YouTube.
+      const typeGroup = XTypeGroup(
+        label: 'Vídeos',
+        mimeTypes: ['video/*'],
       );
-      if (r == null) return; // cancelado
-      final path = r.files.single.path;
-      if (path == null) {
-        _snack('Não consegui acessar esse vídeo. Tente outro (ou copie para a '
-            'memória do aparelho).');
-        return;
-      }
+      final XFile? file = await openFile(acceptedTypeGroups: [typeGroup]);
+      if (file == null) return; // cancelado
+      final path = file.path;
       setState(() {
         _videoPath = path;
         _videoBytes = File(path).existsSync() ? File(path).lengthSync() : 0;
@@ -135,8 +117,11 @@ class _HomeScreenState extends State<HomeScreen> {
         targetLangs: targets,
         onProgress: _setProgress,
       );
-      await _refreshModelStatus();
-      if (mounted) _snack('Modelos prontos. Já dá pra gerar offline.');
+      await _refreshWhisperStatus();
+      if (mounted) {
+        setState(() => _langsDownloaded = true);
+        _snack('Modelos prontos. Já dá pra gerar offline.');
+      }
     } catch (e) {
       if (mounted) _snack('Erro no download: $e');
     } finally {
@@ -167,7 +152,8 @@ class _HomeScreenState extends State<HomeScreen> {
         targetLangs: targets,
         onProgress: _setProgress,
       );
-      await _refreshModelStatus();
+      await _refreshWhisperStatus();
+      if (mounted) setState(() => _langsDownloaded = true);
       if (!mounted) return;
       await Navigator.of(context).push(
         MaterialPageRoute(builder: (_) => ResultScreen(results: results)),
@@ -179,8 +165,8 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  void _snack(String m) => ScaffoldMessenger.of(context)
-      .showSnackBar(SnackBar(content: Text(m), duration: const Duration(seconds: 5)));
+  void _snack(String m) => ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(m), duration: const Duration(seconds: 5)));
 
   @override
   Widget build(BuildContext context) {
@@ -243,10 +229,10 @@ class _HomeScreenState extends State<HomeScreen> {
                 ...kSupportedLanguages.entries.map((e) =>
                     DropdownMenuItem(value: e.key, child: Text(e.value))),
               ],
-              onChanged: (v) {
-                setState(() => _sourceLang = v!);
-                _refreshModelStatus();
-              },
+              onChanged: (v) => setState(() {
+                _sourceLang = v!;
+                _langsDownloaded = false;
+              }),
             ),
             const SizedBox(height: 16),
 
@@ -260,10 +246,10 @@ class _HomeScreenState extends State<HomeScreen> {
                 return FilterChip(
                   label: Text(e.value),
                   selected: on,
-                  onSelected: (v) {
-                    setState(() => _targets[e.key] = v);
-                    _refreshModelStatus();
-                  },
+                  onSelected: (v) => setState(() {
+                    _targets[e.key] = v;
+                    _langsDownloaded = false;
+                  }),
                 );
               }).toList(),
             ),
@@ -280,7 +266,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   .toList(),
               onChanged: (v) {
                 setState(() => _model = v!);
-                _refreshModelStatus();
+                _refreshWhisperStatus();
               },
             ),
             const SizedBox(height: 16),
@@ -291,8 +277,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
             // ----- Ação principal -----
             FilledButton.icon(
-              onPressed:
-                  (busy || _videoPath == null) ? null : _generate,
+              onPressed: (busy || _videoPath == null) ? null : _generate,
               icon: const Icon(Icons.subtitles_outlined),
               label: const Text('Gerar legendas'),
             ),
@@ -351,8 +336,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: Text(
                     ready
                         ? 'Modelos prontos — funciona offline.'
-                        : 'Baixe os modelos (transcrição + tradução) antes de '
-                            'gerar offline.',
+                        : 'Baixe os modelos (transcrição + tradução) para gerar '
+                            'offline.',
                     style: const TextStyle(fontWeight: FontWeight.w600),
                   ),
                 ),
@@ -362,7 +347,7 @@ class _HomeScreenState extends State<HomeScreen> {
             Text(
               'Whisper "${_model.modelName}": '
               '${_whisperReady ? "✓ baixado" : "✗ falta"}\n'
-              'Idiomas: ${_missingLangs.isEmpty ? "✓ todos baixados" : "faltam ${_missingLangs.map((c) => kSupportedLanguages[c]).join(", ")}"}',
+              'Idiomas: ${_langsDownloaded ? "✓ baixados" : "toque em Baixar (re-baixar é rápido se já existir)"}',
               style: Theme.of(context).textTheme.bodySmall,
             ),
             const SizedBox(height: 10),
