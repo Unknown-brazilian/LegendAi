@@ -15,6 +15,8 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
+enum _Busy { idle, downloading, generating }
+
 class _HomeScreenState extends State<HomeScreen> {
   final SubtitleService _service = SubtitleService();
 
@@ -40,22 +42,107 @@ class _HomeScreenState extends State<HomeScreen> {
     'de': false,
   };
 
-  bool _running = false;
+  _Busy _busy = _Busy.idle;
   String _status = '';
   double? _fraction;
 
-  Future<void> _pickVideo() async {
-    final r = await FilePicker.pickFiles(type: FileType.video);
-    final path = r?.files.single.path;
-    if (path == null) return;
-    setState(() {
-      _videoPath = path;
-      _videoBytes = File(path).existsSync() ? File(path).lengthSync() : 0;
-    });
+  // Estado dos modelos baixados.
+  bool _whisperReady = false;
+  List<String> _missingLangs = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _refreshModelStatus();
   }
 
   List<String> get _selectedTargets =>
       _targets.entries.where((e) => e.value).map((e) => e.key).toList();
+
+  /// Idiomas (ML Kit) necessários para a config atual.
+  List<String> get _neededLangs {
+    final s = <String>{..._selectedTargets};
+    if (_sourceLang == 'auto') {
+      s.addAll(kSupportedLanguages.keys);
+    } else {
+      s.add(_sourceLang);
+    }
+    return s.toList();
+  }
+
+  Future<void> _refreshModelStatus() async {
+    try {
+      final ready = await _service.isWhisperModelReady(_model);
+      final missing = await _service.missingTranslationModels(_neededLangs);
+      if (!mounted) return;
+      setState(() {
+        _whisperReady = ready;
+        _missingLangs = missing;
+      });
+    } catch (_) {
+      // Se o ML Kit ainda não respondeu, mantém o estado atual (sem quebrar a UI).
+    }
+  }
+
+  bool get _modelsReady => _whisperReady && _missingLangs.isEmpty;
+
+  void _setProgress(String msg, double? frac) {
+    if (!mounted) return;
+    setState(() {
+      _status = msg;
+      _fraction = frac;
+    });
+  }
+
+  Future<void> _pickVideo() async {
+    try {
+      final r = await FilePicker.pickFiles(
+        type: FileType.video,
+        allowMultiple: false,
+        withData: false,
+      );
+      if (r == null) return; // cancelado
+      final path = r.files.single.path;
+      if (path == null) {
+        _snack('Não consegui acessar esse vídeo. Tente outro (ou copie para a '
+            'memória do aparelho).');
+        return;
+      }
+      setState(() {
+        _videoPath = path;
+        _videoBytes = File(path).existsSync() ? File(path).lengthSync() : 0;
+      });
+    } catch (e) {
+      _snack('Erro ao abrir o seletor de vídeo: $e');
+    }
+  }
+
+  Future<void> _downloadModels() async {
+    final targets = _selectedTargets;
+    if (targets.isEmpty) {
+      _snack('Selecione pelo menos um idioma de saída.');
+      return;
+    }
+    setState(() {
+      _busy = _Busy.downloading;
+      _status = 'Iniciando download…';
+      _fraction = null;
+    });
+    try {
+      await _service.downloadAllModels(
+        model: _model,
+        sourceLang: _sourceLang,
+        targetLangs: targets,
+        onProgress: _setProgress,
+      );
+      await _refreshModelStatus();
+      if (mounted) _snack('Modelos prontos. Já dá pra gerar offline.');
+    } catch (e) {
+      if (mounted) _snack('Erro no download: $e');
+    } finally {
+      if (mounted) setState(() => _busy = _Busy.idle);
+    }
+  }
 
   Future<void> _generate() async {
     final path = _videoPath;
@@ -67,7 +154,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     setState(() {
-      _running = true;
+      _busy = _Busy.generating;
       _status = 'Iniciando…';
       _fraction = null;
     });
@@ -78,34 +165,28 @@ class _HomeScreenState extends State<HomeScreen> {
         model: _model,
         sourceLang: _sourceLang,
         targetLangs: targets,
-        onProgress: (msg, frac) {
-          if (!mounted) return;
-          setState(() {
-            _status = msg;
-            _fraction = frac;
-          });
-        },
+        onProgress: _setProgress,
       );
+      await _refreshModelStatus();
       if (!mounted) return;
       await Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => ResultScreen(results: results),
-        ),
+        MaterialPageRoute(builder: (_) => ResultScreen(results: results)),
       );
     } catch (e) {
       if (mounted) _snack('Erro: $e');
     } finally {
-      if (mounted) setState(() => _running = false);
+      if (mounted) setState(() => _busy = _Busy.idle);
     }
   }
 
-  void _snack(String m) =>
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
+  void _snack(String m) => ScaffoldMessenger.of(context)
+      .showSnackBar(SnackBar(content: Text(m), duration: const Duration(seconds: 5)));
 
   @override
   Widget build(BuildContext context) {
     final fileName = _videoPath?.split('/').last;
     final sizeMb = (_videoBytes / (1024 * 1024)).toStringAsFixed(1);
+    final busy = _busy != _Busy.idle;
 
     return Scaffold(
       appBar: AppBar(
@@ -121,7 +202,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
       ),
       body: AbsorbPointer(
-        absorbing: _running,
+        absorbing: busy,
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
@@ -162,12 +243,15 @@ class _HomeScreenState extends State<HomeScreen> {
                 ...kSupportedLanguages.entries.map((e) =>
                     DropdownMenuItem(value: e.key, child: Text(e.value))),
               ],
-              onChanged: (v) => setState(() => _sourceLang = v!),
+              onChanged: (v) {
+                setState(() => _sourceLang = v!);
+                _refreshModelStatus();
+              },
             ),
             const SizedBox(height: 16),
 
             // ----- Idiomas de saída -----
-            _label('Traduzir para'),
+            _label('Traduzir para (idioma da legenda)'),
             Wrap(
               spacing: 8,
               runSpacing: 4,
@@ -176,7 +260,10 @@ class _HomeScreenState extends State<HomeScreen> {
                 return FilterChip(
                   label: Text(e.value),
                   selected: on,
-                  onSelected: (v) => setState(() => _targets[e.key] = v),
+                  onSelected: (v) {
+                    setState(() => _targets[e.key] = v);
+                    _refreshModelStatus();
+                  },
                 );
               }).toList(),
             ),
@@ -191,31 +278,102 @@ class _HomeScreenState extends State<HomeScreen> {
                   .map((e) =>
                       DropdownMenuItem(value: e.key, child: Text(e.value)))
                   .toList(),
-              onChanged: (v) => setState(() => _model = v!),
+              onChanged: (v) {
+                setState(() => _model = v!);
+                _refreshModelStatus();
+              },
             ),
-            const SizedBox(height: 8),
-            Text(
-              'Modelos maiores são mais precisos, porém mais lentos e pesados. '
-              'O modelo é baixado uma única vez. Em compilação release a '
-              'transcrição é ~5x mais rápida que em debug.',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 16),
+
+            // ----- Download de modelos -----
+            _modelsCard(),
+            const SizedBox(height: 16),
 
             // ----- Ação principal -----
             FilledButton.icon(
-              onPressed: (_running || _videoPath == null) ? null : _generate,
+              onPressed:
+                  (busy || _videoPath == null) ? null : _generate,
               icon: const Icon(Icons.subtitles_outlined),
               label: const Text('Gerar legendas'),
             ),
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(
+                'Em compilação release a transcrição é ~5x mais rápida que em '
+                'debug. Modelos maiores são mais precisos, porém mais lentos.',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
 
-            // ----- Progresso -----
-            if (_running) ...[
+            // ----- Progresso (download ou geração) -----
+            if (busy) ...[
               const SizedBox(height: 24),
+              Text(
+                _busy == _Busy.downloading
+                    ? 'Baixando modelos'
+                    : 'Gerando legendas',
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 6),
               LinearProgressIndicator(value: _fraction),
               const SizedBox(height: 8),
-              Text(_status, textAlign: TextAlign.center),
+              Text(
+                _fraction != null
+                    ? '$_status  (${(_fraction! * 100).toStringAsFixed(0)}%)'
+                    : _status,
+                textAlign: TextAlign.center,
+              ),
             ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _modelsCard() {
+    final ready = _modelsReady;
+    return Card(
+      color: ready ? Colors.green.withValues(alpha: 0.08) : null,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  ready ? Icons.check_circle : Icons.cloud_download_outlined,
+                  color: ready ? Colors.green : null,
+                  size: 20,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    ready
+                        ? 'Modelos prontos — funciona offline.'
+                        : 'Baixe os modelos (transcrição + tradução) antes de '
+                            'gerar offline.',
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Whisper "${_model.modelName}": '
+              '${_whisperReady ? "✓ baixado" : "✗ falta"}\n'
+              'Idiomas: ${_missingLangs.isEmpty ? "✓ todos baixados" : "faltam ${_missingLangs.map((c) => kSupportedLanguages[c]).join(", ")}"}',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 10),
+            OutlinedButton.icon(
+              onPressed:
+                  (_busy != _Busy.idle || ready) ? null : _downloadModels,
+              icon: const Icon(Icons.download),
+              label: Text(ready
+                  ? 'Modelos baixados'
+                  : 'Baixar modelo de transcrição e tradução'),
+            ),
           ],
         ),
       ),
@@ -224,7 +382,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _label(String text) => Padding(
         padding: const EdgeInsets.only(bottom: 6),
-        child: Text(text,
-            style: const TextStyle(fontWeight: FontWeight.bold)),
+        child:
+            Text(text, style: const TextStyle(fontWeight: FontWeight.bold)),
       );
 }

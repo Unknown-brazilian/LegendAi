@@ -2,6 +2,12 @@
     <!-- INTERNET: baixar o modelo Whisper e os pares de idioma do ML Kit na 1ª
          vez. Nenhum áudio/transcrição é enviado para a rede. -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Acesso a vídeos para o seletor de arquivos. Android 13+ usa
+         READ_MEDIA_VIDEO; versões anteriores usam READ_EXTERNAL_STORAGE. -->
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO"/>
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO"/>
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32"/>
     <application
         android:label="LegendAí"
         android:name="${applicationName}"
