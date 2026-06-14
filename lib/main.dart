@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:whisper_ggml_plus_ffmpeg/whisper_ggml_plus_ffmpeg.dart';
+import 'package:whisper_ggml_plus/whisper_ggml_plus.dart';
 
+import 'services/ffmpeg_audio_converter.dart';
 import 'ui/splash_screen.dart';
 
 /// Cores da marca (mesma linguagem visual do AnotAí).
@@ -8,7 +9,7 @@ const Color kBrandOrange = Color(0xFFF7931A);
 const Color kBrandBlack = Color(0xFF0D0D0D);
 
 /// Versão exibida na splash. Manter em sincronia com `version:` no pubspec.
-const String kAppVersion = '1.1.3';
+const String kAppVersion = '1.1.4';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -30,9 +31,9 @@ void main() {
         ),
       );
 
-  // Registrar o conversor FFmpeg não pode derrubar o app.
+  // Registrar o conversor FFmpeg (ffmpeg_kit_flutter_new) no motor do Whisper.
   try {
-    WhisperFFmpegConverter.register();
+    WhisperController.registerAudioConverter(FfmpegAudioConverter());
   } catch (e) {
     debugPrint('Falha ao registrar conversor FFmpeg: $e');
   }

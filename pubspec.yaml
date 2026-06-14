@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.1.3+5
+version: 1.1.4+6
 
 environment:
   sdk: ^3.12.1
@@ -39,8 +39,11 @@ dependencies:
   # withTimestamps: true. A partir da v1.3.0 desacoplou o FFmpeg.
   whisper_ggml_plus: ^1.5.2
 
-  # Companion que extrai/converte o áudio do vídeo para WAV 16kHz mono 16-bit.
-  whisper_ggml_plus_ffmpeg: ^1.0.0
+  # FFmpeg full-GPL (libass + x264): extrai áudio p/ o Whisper E queima a
+  # legenda no vídeo (burn-in). Substitui o companion _min, cuja lib nativa
+  # antiga falhava ao carregar no Android 15 (derrubava todo o registro de
+  # plugins). Registro um WhisperAudioConverter próprio em main.dart.
+  ffmpeg_kit_flutter_new: ^4.2.1
 
   # Tradução OFFLINE (baixa o par de idiomas sob demanda na 1ª vez).
   google_mlkit_translation: ^0.13.1
