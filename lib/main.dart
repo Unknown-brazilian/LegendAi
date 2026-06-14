@@ -8,7 +8,7 @@ const Color kBrandOrange = Color(0xFFF7931A);
 const Color kBrandBlack = Color(0xFF0D0D0D);
 
 /// Versão exibida na splash. Manter em sincronia com `version:` no pubspec.
-const String kAppVersion = '1.1.2';
+const String kAppVersion = '1.1.3';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();

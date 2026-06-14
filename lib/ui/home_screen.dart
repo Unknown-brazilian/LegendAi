@@ -6,6 +6,7 @@ import 'package:whisper_ggml_plus/whisper_ggml_plus.dart';
 
 import '../services/subtitle_service.dart';
 import 'about_screen.dart';
+import 'diag_screen.dart';
 import 'result_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -178,6 +179,13 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: AppBar(
         title: const Text('LegendAí'),
         actions: [
+          IconButton(
+            tooltip: 'Diagnóstico',
+            icon: const Icon(Icons.bug_report_outlined),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const DiagScreen()),
+            ),
+          ),
           IconButton(
             tooltip: 'Sobre',
             icon: const Icon(Icons.info_outline),
