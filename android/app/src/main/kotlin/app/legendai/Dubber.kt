@@ -63,7 +63,8 @@ object Dubber {
         val videoDurUs = videoDurationUs(videoPath)
         if (videoDurUs > totalUs) totalUs = videoDurUs
         val totalSamples = (totalUs * MASTER_RATE / 1_000_000L).toInt() + MASTER_RATE
-        val master = FloatArray(totalSamples)
+        // 16-bit p/ usar metade da memória de um FloatArray.
+        val master = ShortArray(totalSamples)
 
         // Mixa cada segmento na posição do seu tempo de início
         for ((cue, wav) in segWavs) {
@@ -72,9 +73,9 @@ object Dubber {
             var pos = (cue.startUs * MASTER_RATE / 1_000_000L).toInt()
             for (s in res) {
                 if (pos >= master.size) break
-                var v = master[pos] + s
-                if (v > 1f) v = 1f else if (v < -1f) v = -1f
-                master[pos] = v
+                var v = master[pos].toInt() + (s.coerceIn(-1f, 1f) * 32767f).toInt()
+                if (v > 32767) v = 32767 else if (v < -32768) v = -32768
+                master[pos] = v.toShort()
                 pos++
             }
             wav.delete()
@@ -207,9 +208,10 @@ object Dubber {
 
     // ---------------- AAC ----------------
 
-    /** Codifica [master] (mono, [rate]) em AAC. Retorna (format, lista de pacotes). */
+    /** Codifica [master] (PCM 16-bit mono, [rate]) em AAC, alimentando o
+     *  encoder direto do ShortArray (sem buffer intermediário gigante). */
     private fun encodeAac(
-        master: FloatArray,
+        master: ShortArray,
         rate: Int,
         progress: (Double) -> Unit,
     ): Pair<MediaFormat, List<AacPacket>> {
@@ -228,14 +230,8 @@ object Dubber {
         var outFormat: MediaFormat? = null
         val info = MediaCodec.BufferInfo()
 
-        // PCM 16-bit little-endian
-        val pcm = ByteBuffer.allocate(master.size * 2).order(ByteOrder.LITTLE_ENDIAN)
-        for (s in master) {
-            val v = (s.coerceIn(-1f, 1f) * 32767f).toInt()
-            pcm.putShort(v.toShort())
-        }
-        pcm.flip()
-
+        val totalSamples = master.size
+        var samplePos = 0
         var inputDone = false
         var outputDone = false
         var presentationUs = 0L
@@ -247,19 +243,22 @@ object Dubber {
                 if (inIndex >= 0) {
                     val inBuf = codec.getInputBuffer(inIndex)!!
                     inBuf.clear()
-                    val chunk = minOf(inBuf.capacity(), pcm.remaining())
-                    if (chunk <= 0) {
+                    val capShorts = inBuf.capacity() / 2
+                    val remaining = totalSamples - samplePos
+                    if (remaining <= 0) {
                         codec.queueInputBuffer(
                             inIndex, 0, 0, presentationUs, MediaCodec.BUFFER_FLAG_END_OF_STREAM
                         )
                         inputDone = true
                     } else {
-                        val slice = ByteArray(chunk)
-                        pcm.get(slice)
-                        inBuf.put(slice)
-                        codec.queueInputBuffer(inIndex, 0, chunk, presentationUs, 0)
-                        presentationUs += (chunk / bytesPerUs).toLong()
-                        progress(1.0 - pcm.remaining().toDouble() / (master.size * 2))
+                        val n = minOf(capShorts, remaining)
+                        inBuf.order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
+                            .put(master, samplePos, n)
+                        val bytes = n * 2
+                        codec.queueInputBuffer(inIndex, 0, bytes, presentationUs, 0)
+                        samplePos += n
+                        presentationUs += (bytes / bytesPerUs).toLong()
+                        progress(samplePos.toDouble() / totalSamples)
                     }
                 }
             }

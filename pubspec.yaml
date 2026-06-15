@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.3.0+12
+version: 1.3.1+13
 
 environment:
   sdk: ^3.12.1
@@ -50,10 +50,9 @@ dependencies:
   # automaticamente", para saber de que idioma traduzir cada segmento.
   google_mlkit_language_id: ^0.13.1
 
-  # Seleção de vídeo do armazenamento LOCAL do aparelho (SAF). Flutter-team,
-  # registra de forma confiável (o file_picker antigo não registrava o canal
-  # nativo neste toolchain). Só arquivos locais — nada de nuvem/YouTube.
-  file_selector: ^1.1.0
+  # OBS: a seleção de vídeo é via SAF NATIVO (canal legendai/pick em
+  # MainActivity), copiando em streaming p/ o cache — o file_selector carregava
+  # o arquivo inteiro na RAM e dava OutOfMemory em vídeos grandes (>5 min).
   path_provider: ^2.1.5
   share_plus: ^12.0.2
 

@@ -1,7 +1,7 @@
 import 'dart:io';
 
-import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:whisper_ggml_plus/whisper_ggml_plus.dart';
 
 import '../services/subtitle_service.dart';
@@ -80,23 +80,20 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
+  static const MethodChannel _pickChannel = MethodChannel('legendai/pick');
+
   Future<void> _pickVideo() async {
     try {
-      // Seletor de documentos do Android (SAF): mostra os vídeos do
-      // armazenamento LOCAL do aparelho. Nada de nuvem/YouTube.
-      const typeGroup = XTypeGroup(
-        label: 'Vídeos',
-        mimeTypes: ['video/*'],
-      );
-      final XFile? file = await openFile(acceptedTypeGroups: [typeGroup]);
-      if (file == null) return; // cancelado
-      final path = file.path;
+      // Seletor nativo (SAF): copia o vídeo local em streaming p/ o cache,
+      // sem carregar tudo na RAM (evita OOM em vídeos grandes). Só local.
+      final path = await _pickChannel.invokeMethod<String>('pickVideo');
+      if (path == null) return; // cancelado
       setState(() {
         _videoPath = path;
         _videoBytes = File(path).existsSync() ? File(path).lengthSync() : 0;
       });
-    } catch (e) {
-      _snack('Erro ao abrir o seletor de vídeo: $e');
+    } on PlatformException catch (e) {
+      _snack('Erro ao abrir o seletor de vídeo: ${e.message}');
     }
   }
 

@@ -2,6 +2,8 @@ package app.legendai
 
 import android.app.Activity
 import android.content.Intent
+import android.net.Uri
+import android.provider.OpenableColumns
 import android.media.AudioFormat
 import android.media.MediaCodec
 import android.media.MediaExtractor
@@ -22,10 +24,13 @@ class MainActivity : FlutterActivity() {
     private val saveChannel = "legendai/save"
     private val burnChannel = "legendai/burn"
     private val dubChannel = "legendai/dub"
+    private val pickChannel = "legendai/pick"
 
     private val createDocRequest = 0x5C17
+    private val openDocRequest = 0x5C18
     private var pendingSaveResult: MethodChannel.Result? = null
     private var pendingSaveSourcePath: String? = null
+    private var pendingPickResult: MethodChannel.Result? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -34,9 +39,6 @@ class MainActivity : FlutterActivity() {
         // add() é idempotente por classe.
         safeAdd(flutterEngine, "path_provider") {
             io.flutter.plugins.pathprovider.PathProviderPlugin()
-        }
-        safeAdd(flutterEngine, "file_selector") {
-            dev.flutter.packages.file_selector_android.FileSelectorAndroidPlugin()
         }
         safeAdd(flutterEngine, "mlkit_commons") {
             com.google_mlkit_commons.GoogleMlKitCommonsPlugin()
@@ -101,6 +103,31 @@ class MainActivity : FlutterActivity() {
                             runOnUiThread { result.error("BURN_FAIL", t.message, null) }
                         }
                     }.start()
+                }
+                else -> result.notImplemented()
+            }
+        }
+
+        // Seleção de vídeo (SAF): copia o vídeo escolhido para o cache em
+        // STREAMING (sem carregar tudo na RAM — evita OOM em vídeos grandes).
+        MethodChannel(messenger, pickChannel).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "pickVideo" -> {
+                    if (pendingPickResult != null) {
+                        result.error("BUSY", "Já há uma seleção em andamento.", null)
+                        return@setMethodCallHandler
+                    }
+                    pendingPickResult = result
+                    val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        type = "video/*"
+                    }
+                    try {
+                        startActivityForResult(intent, openDocRequest)
+                    } catch (e: Exception) {
+                        pendingPickResult = null
+                        result.error("NO_PICKER", e.message, null)
+                    }
                 }
                 else -> result.notImplemented()
             }
@@ -190,7 +217,13 @@ class MainActivity : FlutterActivity() {
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != createDocRequest) return
+        when (requestCode) {
+            createDocRequest -> handleSaveResult(resultCode, data)
+            openDocRequest -> handlePickResult(resultCode, data)
+        }
+    }
+
+    private fun handleSaveResult(resultCode: Int, data: Intent?) {
         val res = pendingSaveResult
         val src = pendingSaveSourcePath
         pendingSaveResult = null
@@ -200,7 +233,7 @@ class MainActivity : FlutterActivity() {
         if (resultCode == Activity.RESULT_OK && uri != null && src != null) {
             try {
                 contentResolver.openOutputStream(uri)?.use { os ->
-                    File(src).inputStream().use { it.copyTo(os) }
+                    File(src).inputStream().use { it.copyTo(os, 1 shl 16) }
                 } ?: throw IllegalStateException("Não consegui abrir o destino.")
                 res.success(uri.toString())
             } catch (e: Exception) {
@@ -208,6 +241,42 @@ class MainActivity : FlutterActivity() {
             }
         } else {
             res.success(null) // cancelado
+        }
+    }
+
+    private fun handlePickResult(resultCode: Int, data: Intent?) {
+        val res = pendingPickResult
+        pendingPickResult = null
+        if (res == null) return
+        val uri = data?.data
+        if (resultCode != Activity.RESULT_OK || uri == null) {
+            res.success(null) // cancelado
+            return
+        }
+        // Copia em background, em streaming (buffer pequeno), p/ não estourar a RAM.
+        Thread {
+            try {
+                val name = queryDisplayName(uri) ?: "video_${System.currentTimeMillis()}.mp4"
+                val safe = name.replace(Regex("[^A-Za-z0-9._-]"), "_")
+                val dest = File(cacheDir, "picked_${System.currentTimeMillis()}_$safe")
+                contentResolver.openInputStream(uri)?.use { input ->
+                    dest.outputStream().use { out -> input.copyTo(out, 1 shl 16) }
+                } ?: throw IllegalStateException("Não consegui abrir o vídeo.")
+                runOnUiThread { res.success(dest.absolutePath) }
+            } catch (e: Exception) {
+                runOnUiThread { res.error("PICK_FAIL", e.message, null) }
+            }
+        }.start()
+    }
+
+    private fun queryDisplayName(uri: Uri): String? {
+        return try {
+            contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+                ?.use { c ->
+                    if (c.moveToFirst()) c.getString(0) else null
+                }
+        } catch (_: Exception) {
+            null
         }
     }
 
