@@ -23,14 +23,15 @@ class MainActivity : FlutterActivity() {
     private val audioChannel = "legendai/audio"
     private val saveChannel = "legendai/save"
     private val burnChannel = "legendai/burn"
-    private val dubChannel = "legendai/dub"
     private val pickChannel = "legendai/pick"
 
     private val createDocRequest = 0x5C17
     private val openDocRequest = 0x5C18
+    private val openFontRequest = 0x5C19
     private var pendingSaveResult: MethodChannel.Result? = null
     private var pendingSaveSourcePath: String? = null
     private var pendingPickResult: MethodChannel.Result? = null
+    private var pendingFontResult: MethodChannel.Result? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -92,9 +93,15 @@ class MainActivity : FlutterActivity() {
                         result.error("ARG", "video/srt/output nulo", null)
                         return@setMethodCallHandler
                     }
+                    val style = SubtitleStyle(
+                        fontFamily = call.argument<String>("font") ?: "sans",
+                        sizeScale = call.argument<Number>("size")?.toFloat() ?: 0.045f,
+                        color = (call.argument<Number>("color")?.toLong() ?: 0xFFFFFFFFL).toInt(),
+                        fontPath = call.argument<String>("fontPath"),
+                    )
                     Thread {
                         try {
-                            VideoSubtitleBurner.burn(video, srt, output) { frac ->
+                            VideoSubtitleBurner.burn(video, srt, output, style) { frac ->
                                 runOnUiThread { burnCh.invokeMethod("progress", frac) }
                             }
                             runOnUiThread { result.success(output) }
@@ -129,36 +136,22 @@ class MainActivity : FlutterActivity() {
                         result.error("NO_PICKER", e.message, null)
                     }
                 }
-                else -> result.notImplemented()
-            }
-        }
-
-        // Dublagem: gera vídeo com áudio TTS no idioma alvo (sem reencodar vídeo).
-        val dubCh = MethodChannel(messenger, dubChannel)
-        dubCh.setMethodCallHandler { call, result ->
-            when (call.method) {
-                "dub" -> {
-                    val video = call.argument<String>("video")
-                    val srt = call.argument<String>("srt")
-                    val lang = call.argument<String>("lang")
-                    val output = call.argument<String>("output")
-                    if (video == null || srt == null || lang == null || output == null) {
-                        result.error("ARG", "video/srt/lang/output nulo", null)
+                "pickFont" -> {
+                    if (pendingFontResult != null) {
+                        result.error("BUSY", "Já há uma importação em andamento.", null)
                         return@setMethodCallHandler
                     }
-                    Thread {
-                        try {
-                            Dubber.dub(
-                                applicationContext, video, srt, lang, output, cacheDir
-                            ) { frac ->
-                                runOnUiThread { dubCh.invokeMethod("progress", frac) }
-                            }
-                            runOnUiThread { result.success(output) }
-                        } catch (t: Throwable) {
-                            android.util.Log.e("LegendAiDub", "dub falhou: ${t.message}", t)
-                            runOnUiThread { result.error("DUB_FAIL", t.message, null) }
-                        }
-                    }.start()
+                    pendingFontResult = result
+                    val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        type = "*/*"
+                    }
+                    try {
+                        startActivityForResult(intent, openFontRequest)
+                    } catch (e: Exception) {
+                        pendingFontResult = null
+                        result.error("NO_PICKER", e.message, null)
+                    }
                 }
                 else -> result.notImplemented()
             }
@@ -220,6 +213,37 @@ class MainActivity : FlutterActivity() {
         when (requestCode) {
             createDocRequest -> handleSaveResult(resultCode, data)
             openDocRequest -> handlePickResult(resultCode, data)
+            openFontRequest -> handleFontResult(resultCode, data)
+        }
+    }
+
+    private fun handleFontResult(resultCode: Int, data: Intent?) {
+        val res = pendingFontResult
+        pendingFontResult = null
+        if (res == null) return
+        val uri = data?.data
+        if (resultCode != Activity.RESULT_OK || uri == null) {
+            res.success(null)
+            return
+        }
+        try {
+            val name = queryDisplayName(uri) ?: "fonte.ttf"
+            val lower = name.lowercase()
+            if (!lower.endsWith(".ttf") && !lower.endsWith(".otf")) {
+                res.error("BAD_FONT", "Escolha um arquivo .ttf ou .otf.", null)
+                return
+            }
+            val safe = name.replace(Regex("[^A-Za-z0-9._-]"), "_")
+            val dir = File(filesDir, "fonts").apply { mkdirs() }
+            val dest = File(dir, safe)
+            contentResolver.openInputStream(uri)?.use { input ->
+                dest.outputStream().use { out -> input.copyTo(out) }
+            } ?: throw IllegalStateException("Não consegui abrir a fonte.")
+            // valida que é uma fonte utilizável
+            android.graphics.Typeface.createFromFile(dest)
+            res.success(mapOf("path" to dest.absolutePath, "name" to name))
+        } catch (e: Exception) {
+            res.error("FONT_FAIL", e.message, null)
         }
     }
 

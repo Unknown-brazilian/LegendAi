@@ -32,6 +32,7 @@ object VideoSubtitleBurner {
         videoPath: String,
         srtPath: String,
         outputPath: String,
+        style: SubtitleStyle,
         progress: Progress,
     ) {
         val cues = parseSrt(File(srtPath).readText())
@@ -85,7 +86,7 @@ object VideoSubtitleBurner {
 
         // --- GL output (decoder -> OES texture) ---
         inputSurface.makeCurrent()
-        val outputSurface = OutputSurface(storedW, storedH, rotation)
+        val outputSurface = OutputSurface(storedW, storedH, rotation, style)
 
         // --- Decoder ---
         val videoMime = inputFormat.getString(MediaFormat.KEY_MIME)!!
