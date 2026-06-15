@@ -20,6 +20,7 @@ class MainActivity : FlutterActivity() {
     private val diagChannel = "legendai/diag"
     private val audioChannel = "legendai/audio"
     private val saveChannel = "legendai/save"
+    private val burnChannel = "legendai/burn"
 
     private val createDocRequest = 0x5C17
     private var pendingSaveResult: MethodChannel.Result? = null
@@ -76,6 +77,34 @@ class MainActivity : FlutterActivity() {
             }
         }
 
+        // Burn-in: queima a legenda (.srt) no vídeo e gera um .mp4 (MediaCodec+GL).
+        val burnCh = MethodChannel(messenger, burnChannel)
+        burnCh.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "burn" -> {
+                    val video = call.argument<String>("video")
+                    val srt = call.argument<String>("srt")
+                    val output = call.argument<String>("output")
+                    if (video == null || srt == null || output == null) {
+                        result.error("ARG", "video/srt/output nulo", null)
+                        return@setMethodCallHandler
+                    }
+                    Thread {
+                        try {
+                            VideoSubtitleBurner.burn(video, srt, output) { frac ->
+                                runOnUiThread { burnCh.invokeMethod("progress", frac) }
+                            }
+                            runOnUiThread { result.success(output) }
+                        } catch (t: Throwable) {
+                            android.util.Log.e("LegendAiBurn", "burn falhou: ${t.message}", t)
+                            runOnUiThread { result.error("BURN_FAIL", t.message, null) }
+                        }
+                    }.start()
+                }
+                else -> result.notImplemented()
+            }
+        }
+
         // Salvar arquivo numa pasta escolhida pelo usuário (SAF "Salvar como").
         MethodChannel(messenger, saveChannel).setMethodCallHandler { call, result ->
             when (call.method) {
@@ -92,9 +121,10 @@ class MainActivity : FlutterActivity() {
                     }
                     pendingSaveResult = result
                     pendingSaveSourcePath = sourcePath
+                    val mime = call.argument<String>("mime") ?: "application/octet-stream"
                     val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
                         addCategory(Intent.CATEGORY_OPENABLE)
-                        type = "application/x-subrip"
+                        type = mime
                         putExtra(Intent.EXTRA_TITLE, fileName)
                     }
                     try {

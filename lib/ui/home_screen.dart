@@ -157,7 +157,9 @@ class _HomeScreenState extends State<HomeScreen> {
       if (mounted) setState(() => _langsDownloaded = true);
       if (!mounted) return;
       await Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => ResultScreen(results: results)),
+        MaterialPageRoute(
+          builder: (_) => ResultScreen(videoPath: path, results: results),
+        ),
       );
     } catch (e) {
       if (mounted) _snack('Erro: $e');
