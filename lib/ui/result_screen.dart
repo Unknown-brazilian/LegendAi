@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../services/subtitle_service.dart';
@@ -8,9 +9,33 @@ class ResultScreen extends StatelessWidget {
 
   const ResultScreen({super.key, required this.results});
 
-  /// Compartilha/salva um `.srt`. A folha de compartilhamento do Android inclui
-  /// "Salvar em Arquivos/Drive", então cobre salvar numa pasta e compartilhar.
-  Future<void> _shareOne(GeneratedSubtitle sub) async {
+  static const MethodChannel _saveChannel = MethodChannel('legendai/save');
+
+  /// Salva o `.srt` numa pasta/local escolhido pelo usuário (SAF "Salvar como").
+  Future<void> _save(BuildContext context, GeneratedSubtitle sub) async {
+    try {
+      final saved = await _saveChannel.invokeMethod<String>('saveToFolder', {
+        'fileName': sub.fileName,
+        'sourcePath': sub.path,
+      });
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            saved != null ? 'Salvo: ${sub.fileName}' : 'Salvamento cancelado',
+          ),
+        ),
+      );
+    } on PlatformException catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Erro ao salvar: ${e.message}')),
+      );
+    }
+  }
+
+  /// Compartilha o `.srt` (apps, e-mail, etc.).
+  Future<void> _share(GeneratedSubtitle sub) async {
     await SharePlus.instance.share(
       ShareParams(
         files: [XFile(sub.path, mimeType: 'application/x-subrip')],
@@ -49,8 +74,8 @@ class ResultScreen extends StatelessWidget {
         children: [
           Text(
             '${results.length} arquivo(s) .srt gerado(s) no aparelho. '
-            'Toque em Salvar/Compartilhar e escolha "Salvar em Arquivos" para '
-            'guardar numa pasta, ou um app para compartilhar.',
+            'Toque no disquete para salvar numa pasta, ou no compartilhar para '
+            'enviar.',
             style: Theme.of(context).textTheme.bodyMedium,
           ),
           const SizedBox(height: 12),
@@ -60,10 +85,20 @@ class ResultScreen extends StatelessWidget {
                 leading: const Icon(Icons.description_outlined),
                 title: Text(r.fileName),
                 subtitle: Text('${r.langName} • ${r.segments} legendas'),
-                trailing: IconButton(
-                  tooltip: 'Salvar / Compartilhar',
-                  icon: const Icon(Icons.share),
-                  onPressed: () => _shareOne(r),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      tooltip: 'Salvar numa pasta',
+                      icon: const Icon(Icons.save),
+                      onPressed: () => _save(context, r),
+                    ),
+                    IconButton(
+                      tooltip: 'Compartilhar',
+                      icon: const Icon(Icons.share),
+                      onPressed: () => _share(r),
+                    ),
+                  ],
                 ),
               ),
             ),

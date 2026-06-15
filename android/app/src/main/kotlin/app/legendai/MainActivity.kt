@@ -1,5 +1,7 @@
 package app.legendai
 
+import android.app.Activity
+import android.content.Intent
 import android.media.AudioFormat
 import android.media.MediaCodec
 import android.media.MediaExtractor
@@ -9,6 +11,7 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.MethodChannel
 import java.io.BufferedOutputStream
+import java.io.File
 import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -16,6 +19,11 @@ import java.nio.ByteOrder
 class MainActivity : FlutterActivity() {
     private val diagChannel = "legendai/diag"
     private val audioChannel = "legendai/audio"
+    private val saveChannel = "legendai/save"
+
+    private val createDocRequest = 0x5C17
+    private var pendingSaveResult: MethodChannel.Result? = null
+    private var pendingSaveSourcePath: String? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -68,6 +76,39 @@ class MainActivity : FlutterActivity() {
             }
         }
 
+        // Salvar arquivo numa pasta escolhida pelo usuário (SAF "Salvar como").
+        MethodChannel(messenger, saveChannel).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "saveToFolder" -> {
+                    val fileName = call.argument<String>("fileName")
+                    val sourcePath = call.argument<String>("sourcePath")
+                    if (fileName == null || sourcePath == null) {
+                        result.error("ARG", "fileName/sourcePath nulo", null)
+                        return@setMethodCallHandler
+                    }
+                    if (pendingSaveResult != null) {
+                        result.error("BUSY", "Já há um salvamento em andamento.", null)
+                        return@setMethodCallHandler
+                    }
+                    pendingSaveResult = result
+                    pendingSaveSourcePath = sourcePath
+                    val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        type = "application/x-subrip"
+                        putExtra(Intent.EXTRA_TITLE, fileName)
+                    }
+                    try {
+                        startActivityForResult(intent, createDocRequest)
+                    } catch (e: Exception) {
+                        pendingSaveResult = null
+                        pendingSaveSourcePath = null
+                        result.error("NO_PICKER", e.message, null)
+                    }
+                }
+                else -> result.notImplemented()
+            }
+        }
+
         // Diagnóstico: logcat do próprio processo.
         MethodChannel(messenger, diagChannel).setMethodCallHandler { call, result ->
             when (call.method) {
@@ -82,6 +123,29 @@ class MainActivity : FlutterActivity() {
                 }
                 else -> result.notImplemented()
             }
+        }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != createDocRequest) return
+        val res = pendingSaveResult
+        val src = pendingSaveSourcePath
+        pendingSaveResult = null
+        pendingSaveSourcePath = null
+        if (res == null) return
+        val uri = data?.data
+        if (resultCode == Activity.RESULT_OK && uri != null && src != null) {
+            try {
+                contentResolver.openOutputStream(uri)?.use { os ->
+                    File(src).inputStream().use { it.copyTo(os) }
+                } ?: throw IllegalStateException("Não consegui abrir o destino.")
+                res.success(uri.toString())
+            } catch (e: Exception) {
+                res.error("SAVE_FAIL", e.message, null)
+            }
+        } else {
+            res.success(null) // cancelado
         }
     }
 
