@@ -21,6 +21,7 @@ class MainActivity : FlutterActivity() {
     private val audioChannel = "legendai/audio"
     private val saveChannel = "legendai/save"
     private val burnChannel = "legendai/burn"
+    private val dubChannel = "legendai/dub"
 
     private val createDocRequest = 0x5C17
     private var pendingSaveResult: MethodChannel.Result? = null
@@ -98,6 +99,37 @@ class MainActivity : FlutterActivity() {
                         } catch (t: Throwable) {
                             android.util.Log.e("LegendAiBurn", "burn falhou: ${t.message}", t)
                             runOnUiThread { result.error("BURN_FAIL", t.message, null) }
+                        }
+                    }.start()
+                }
+                else -> result.notImplemented()
+            }
+        }
+
+        // Dublagem: gera vídeo com áudio TTS no idioma alvo (sem reencodar vídeo).
+        val dubCh = MethodChannel(messenger, dubChannel)
+        dubCh.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "dub" -> {
+                    val video = call.argument<String>("video")
+                    val srt = call.argument<String>("srt")
+                    val lang = call.argument<String>("lang")
+                    val output = call.argument<String>("output")
+                    if (video == null || srt == null || lang == null || output == null) {
+                        result.error("ARG", "video/srt/lang/output nulo", null)
+                        return@setMethodCallHandler
+                    }
+                    Thread {
+                        try {
+                            Dubber.dub(
+                                applicationContext, video, srt, lang, output, cacheDir
+                            ) { frac ->
+                                runOnUiThread { dubCh.invokeMethod("progress", frac) }
+                            }
+                            runOnUiThread { result.success(output) }
+                        } catch (t: Throwable) {
+                            android.util.Log.e("LegendAiDub", "dub falhou: ${t.message}", t)
+                            runOnUiThread { result.error("DUB_FAIL", t.message, null) }
                         }
                     }.start()
                 }
